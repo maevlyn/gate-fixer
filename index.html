@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gate Fixer</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="shared.css">
+<style>
+  .slots { display: flex; flex-wrap: wrap; gap: 8px; }
+  .slotbtn { font: 600 .85rem/1 var(--f-mono); padding: 9px 12px; border-radius: 999px; border: 1px dashed var(--teal); background: transparent; color: var(--teal); cursor: pointer; }
+  .slotbtn.sel { background: rgba(111,211,200,.15); border-style: solid; }
+  .slotbtn.filled { color: var(--ink); }
+  .palette { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .palette .btn { padding: 10px 6px; display: grid; gap: 4px; justify-items: center; font-family: var(--f-mono); }
+  .palette .btn small { font-weight: 500; font-size: .72rem; color: var(--muted); }
+  .tablewrap { overflow-x: auto; }
+  table.tt.target td.mark { font-weight: 700; }
+  table.tt td.mark.ok { color: var(--good); } table.tt td.mark.no { color: var(--bad); }
+  table.tt th.yours { color: var(--teal); }
+  table.tt th.sep, table.tt td.sep { border-left: 1px solid var(--line); }
+  .stars { font-size: 1.4rem; letter-spacing: 4px; color: var(--amber); }
+  .levels { display: flex; flex-wrap: wrap; gap: 6px; }
+  .lv { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); font: 600 .8rem/1 var(--f-mono); cursor: pointer; }
+  .lv.done { color: var(--amber); border-color: rgba(255,176,46,.45); }
+  .lv.cur { color: var(--ink); border-color: var(--teal); }
+  .lv:disabled { opacity: .35; cursor: not-allowed; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">Gate Fixer<small>Repair the circuit · Grade 12 digital logic</small></div>
+    <div class="stats">
+      <div class="stat"><span>Level</span><b id="sLevel">1/8</b></div>
+      <div class="stat"><span>Stars</span><b id="sStars">0</b></div>
+    </div>
+  </header>
+  <div class="main">
+    <div class="stage" id="stage">
+      <div class="hud"><span class="chip amber" id="hudMsg">Click a dashed slot, then pick a gate</span></div>
+    </div>
+    <aside class="side">
+      <div>
+        <div class="eyebrow" id="lvTag">Level 1</div>
+        <h2 id="title">Ignition interlock</h2>
+        <p class="muted" id="brief" style="margin-top:6px"></p>
+      </div>
+      <div class="levels" id="levels"></div>
+      <div>
+        <div class="eyebrow" style="margin-bottom:8px">Target truth table</div>
+        <div class="tablewrap" id="table"></div>
+      </div>
+      <div class="slots" id="slots"></div>
+      <div class="palette" id="palette"></div>
+      <div class="row">
+        <button class="btn primary" id="test" disabled>Test all inputs</button>
+        <button class="btn" id="clear">Clear gates</button>
+      </div>
+      <div class="feedback" id="fb" hidden></div>
+      <details class="guide" id="guide"><summary>Gate reference</summary><div class="guide-grid" id="guideGrid"></div></details>
+    </aside>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="gates3d.js"></script>
+<script>
+(async function () {
+  await LG.fontsReady;
+  const $ = id => document.getElementById(id);
+  const world = LG.createWorld($('stage'));
+  $('guideGrid').innerHTML = LG.guideHTML();
+
+  const I = (id, x, y, label) => ({ id, type: 'IN', x, y, label });
+  const LEVELS = [
+    { title: 'Ignition interlock', brief: 'The engine may start only when the key is turned (A) and the brake is pressed (B).',
+      target: { Q: (a, b) => a & b },
+      nodes: [I('A', -4, 1.3), I('B', -4, -1.3), { id: 's1', type: 'SLOT', x: 0, y: 0, in: ['A', 'B'] }, { id: 'Q', type: 'OUT', x: 3.6, y: 0, in: ['s1'] }] },
+    { title: 'Two doorbells', brief: 'The chime rings if the front button (A) or the back button (B) is pressed.',
+      target: { Q: (a, b) => a | b },
+      nodes: [I('A', -4, 1.3), I('B', -4, -1.3), { id: 's1', type: 'SLOT', x: 0, y: 0, in: ['A', 'B'] }, { id: 'Q', type: 'OUT', x: 3.6, y: 0, in: ['s1'] }] },
+    { title: 'Staircase light', brief: 'A light has a switch at the top (A) and bottom (B) of the stairs. Flipping either one changes the light. Both off means dark.',
+      target: { Q: (a, b) => a ^ b },
+      nodes: [I('A', -4, 1.3), I('B', -4, -1.3), { id: 's1', type: 'SLOT', x: 0, y: 0, in: ['A', 'B'] }, { id: 'Q', type: 'OUT', x: 3.6, y: 0, in: ['s1'] }] },
+    { title: 'Seatbelt warning', brief: 'The warning light stays on unless both seatbelts (A and B) are fastened.',
+      target: { Q: (a, b) => 1 - (a & b) },
+      nodes: [I('A', -4, 1.3), I('B', -4, -1.3), { id: 's1', type: 'SLOT', x: 0, y: 0, in: ['A', 'B'] }, { id: 'Q', type: 'OUT', x: 3.6, y: 0, in: ['s1'] }] },
+    { title: 'Through an inverter', brief: 'The output passes through a fixed NOT gate. Choose the first gate so the final result is A OR B.',
+      target: { Q: (a, b) => a | b },
+      nodes: [I('A', -4.5, 1.3), I('B', -4.5, -1.3), { id: 's1', type: 'SLOT', x: -0.6, y: 0, in: ['A', 'B'] },
+        { id: 'n', type: 'NOT', x: 2.6, y: 0, in: ['s1'] }, { id: 'Q', type: 'OUT', x: 5.4, y: 0, in: ['n'] }] },
+    { title: 'Sprinkler control', brief: 'Sprinklers run when smoke (A) and heat (B) are both detected, or when the manual override (C) is on.',
+      target: { Q: (a, b, c) => (a & b) | c },
+      nodes: [I('A', -5.2, 2.4), I('B', -5.2, 0.2), I('C', -5.2, -2.2),
+        { id: 'g1', type: 'AND', x: -1.2, y: 1.2, in: ['A', 'B'] }, { id: 's1', type: 'SLOT', x: 2.6, y: 0, in: ['g1', 'C'] },
+        { id: 'Q', type: 'OUT', x: 5.8, y: 0, in: ['s1'] }] },
+    { title: 'Enabled parity check', brief: 'Output 1 when A and B differ, but only while the enable line C is 1. Two gates are missing.',
+      target: { Q: (a, b, c) => (a ^ b) & c },
+      nodes: [I('A', -5.2, 2.4), I('B', -5.2, 0.2), I('C', -5.2, -2.2),
+        { id: 's1', type: 'SLOT', x: -1.2, y: 1.2, in: ['A', 'B'] }, { id: 's2', type: 'SLOT', x: 2.6, y: 0, in: ['s1', 'C'] },
+        { id: 'Q', type: 'OUT', x: 5.8, y: 0, in: ['s2'] }] },
+    { title: 'Half adder', brief: 'Add two one-bit numbers. S is the sum bit and C is the carry bit, so 1 + 1 gives S = 0, C = 1.',
+      target: { S: (a, b) => a ^ b, C: (a, b) => a & b },
+      nodes: [I('A', -4.4, 1.6), I('B', -4.4, -1.6),
+        { id: 's1', type: 'SLOT', x: 0, y: 1.6, in: ['A', 'B'], mx: [-1.6, -2.5] }, { id: 's2', type: 'SLOT', x: 0, y: -1.6, in: ['A', 'B'], mx: [-2.1, -1.2] },
+        { id: 'S', type: 'OUT', x: 3.6, y: 1.6, in: ['s1'] }, { id: 'C', type: 'OUT', x: 3.6, y: -1.6, in: ['s2'] }] }
+  ];
+  const TWO = ['AND', 'OR', 'XOR', 'NAND', 'NOR', 'XNOR'];
+
+  let L = 0, circ = null, sel = null, tests = 0, testing = false, best = JSON.parse(safeGet() || '{}'), marks = [];
+  function safeGet() { try { return localStorage.getItem('gatefixer.best'); } catch (e) { return null; } }
+  function safeSet() { try { localStorage.setItem('gatefixer.best', JSON.stringify(best)); } catch (e) { } }
+
+  const lv = () => LEVELS[L];
+  const slotIds = () => circ.order.filter(n => n.isSlot).map(n => n.id);
+  const rows = () => LG.combos(circ.ins.length);
+  const asInputs = r => Object.fromEntries(circ.ins.map((id, i) => [id, r[i]]));
+
+  function load(i) {
+    L = i; tests = 0; marks = []; testing = false;
+    if (circ) circ.dispose();
+    circ = LG.buildCircuit(world, { nodes: lv().nodes });
+    circ.fit();
+    circ.show(asInputs(rows()[0]));
+    sel = slotIds()[0]; circ.select(sel);
+    $('lvTag').textContent = `Level ${L + 1} of ${LEVELS.length}`;
+    $('title').textContent = lv().title; $('brief').textContent = lv().brief;
+    $('fb').hidden = true; $('fb').innerHTML = '';
+    render();
+  }
+
+  function render() {
+    $('sLevel').textContent = `${L + 1}/${LEVELS.length}`;
+    $('sStars').textContent = Object.values(best).reduce((a, b) => a + b, 0);
+    $('levels').innerHTML = LEVELS.map((_, i) => `<button class="lv ${best[i] ? 'done' : ''} ${i === L ? 'cur' : ''}" data-i="${i}" ${i > 0 && !best[i - 1] && !best[i] ? 'disabled' : ''} aria-label="Level ${i + 1}">${i + 1}</button>`).join('');
+    const outs = circ.outs, ins = circ.ins;
+    const head = ins.map(i => `<th>${i}</th>`).join('') + outs.map((o, k) => `<th class="${k === 0 ? 'sep' : ''}">${o}</th>`).join('') + outs.map((o, k) => `<th class="yours ${k === 0 ? 'sep' : ''}">yours ${o}</th>`).join('');
+    const body = rows().map((r, ri) => {
+      const t = outs.map((o, k) => { const v = lv().target[o](...r); return `<td class="q${v} ${k === 0 ? 'sep' : ''}">${v}</td>`; }).join('');
+      const y = outs.map((o, k) => { const m = marks[ri]; if (!m) return `<td class="mark ${k === 0 ? 'sep' : ''}">·</td>`; const ok = m[o] === lv().target[o](...r); return `<td class="mark ${ok ? 'ok' : 'no'} ${k === 0 ? 'sep' : ''}">${m[o]} ${ok ? '✓' : '✗'}</td>`; }).join('');
+      return `<tr data-r="${ri}">${r.map(x => `<td>${x}</td>`).join('')}${t}${y}</tr>`;
+    }).join('');
+    $('table').innerHTML = `<table class="tt target"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+    $('slots').innerHTML = slotIds().map((id, k) => { const t = circ.nodes[id].slotType; return `<button class="slotbtn ${id === sel ? 'sel' : ''} ${t ? 'filled' : ''}" data-id="${id}">Slot ${k + 1}: ${t || 'empty'}</button>`; }).join('');
+    $('palette').innerHTML = TWO.map(t => `<button class="btn" data-t="${t}" ${testing ? 'disabled' : ''}>${t}<small>${LG.SYM[t]}</small></button>`).join('');
+    $('test').disabled = testing || slotIds().some(id => !circ.nodes[id].slotType);
+    $('clear').disabled = testing;
+    const empty = slotIds().filter(id => !circ.nodes[id].slotType).length;
+    $('hudMsg').textContent = testing ? 'Testing every input combination…' : empty ? `${empty} empty slot${empty > 1 ? 's' : ''}: pick a gate` : 'Ready to test';
+  }
+
+  function choose(t) {
+    if (testing || !sel) return;
+    circ.setSlot(sel, t); LG.beep(520, 0.06);
+    marks = []; $('fb').hidden = true;
+    const next = slotIds().find(id => !circ.nodes[id].slotType);
+    if (next) { sel = next; circ.select(sel); }
+    circ.show(asInputs(rows()[0]));
+    render();
+  }
+
+  function test() {
+    if (testing) return;
+    testing = true; tests++; marks = []; $('fb').hidden = true; circ.select(null); render();
+    const R = rows(); let i = 0, allOk = true;
+    const step = () => {
+      if (i >= R.length) return done(allOk);
+      const r = R[i];
+      [...$('table').querySelectorAll('tr')].forEach(tr => tr.classList.toggle('hl', tr.dataset.r == i));
+      const v = circ.run(asInputs(r), {
+        speed: 3.2, onDone: () => {
+          marks[i] = Object.fromEntries(circ.outs.map(o => [o, v[o]]));
+          const ok = circ.outs.every(o => v[o] === lv().target[o](...r));
+          allOk = allOk && ok; LG.beep(ok ? 720 : 200, 0.07, ok ? 'sine' : 'square', 0.03);
+          render();
+          [...$('table').querySelectorAll('tr')].forEach(tr => tr.classList.toggle('hl', tr.dataset.r == i));
+          i++; setTimeout(step, 260);
+        }
+      });
+    };
+    step();
+  }
+
+  function done(ok) {
+    testing = false;
+    const fb = $('fb'); fb.hidden = false;
+    if (ok) {
+      const stars = tests === 1 ? 3 : tests === 2 ? 2 : 1;
+      best[L] = Math.max(best[L] || 0, stars); safeSet();
+      LG.chime(true);
+      const expr = circ.outs.map(o => `${o} = ${circ.expression(o)}`).join('<br>');
+      fb.className = 'feedback ok';
+      fb.innerHTML = `<strong>Circuit repaired</strong><div class="stars">${'★'.repeat(stars)}${'☆'.repeat(3 - stars)}</div><div class="expr" style="white-space:normal">${expr}</div>` +
+        (L < LEVELS.length - 1 ? `<button class="btn primary" id="nextLv">Next level</button>` : `<p>All levels repaired. Replay any level to earn three stars.</p>`);
+      const n = $('nextLv'); if (n) n.onclick = () => load(L + 1);
+    } else {
+      LG.chime(false);
+      const bad = rows().map((r, ri) => ({ r, ri })).filter(({ r, ri }) => circ.outs.some(o => marks[ri][o] !== lv().target[o](...r)));
+      fb.className = 'feedback no';
+      fb.innerHTML = `<strong>${bad.length} row${bad.length > 1 ? 's' : ''} wrong</strong><p>Compare the ✗ rows with the target. Which gate gives exactly that output for those inputs? Check the gate reference if you are unsure.</p>`;
+      $('guide').open = true;
+    }
+    sel = slotIds()[0]; circ.select(sel);
+    render();
+  }
+
+  $('palette').addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (b) choose(b.dataset.t); });
+  $('slots').addEventListener('click', e => { const b = e.target.closest('[data-id]'); if (b && !testing) { sel = b.dataset.id; circ.select(sel); render(); } });
+  $('levels').addEventListener('click', e => { const b = e.target.closest('[data-i]'); if (b && !b.disabled && !testing) load(+b.dataset.i); });
+  $('test').onclick = test;
+  $('clear').onclick = () => { if (testing) return; slotIds().forEach(id => circ.setSlot(id, null)); marks = []; sel = slotIds()[0]; circ.select(sel); circ.show(asInputs(rows()[0])); $('fb').hidden = true; render(); };
+  const stage = $('stage');
+  stage.addEventListener('pointermove', e => { stage.style.cursor = circ && circ.pick(e, n => n.isSlot) ? 'pointer' : ''; });
+  stage.addEventListener('click', e => { if (testing) return; const n = circ.pick(e, n => n.isSlot); if (n) { sel = n.id; circ.select(sel); render(); } });
+  addEventListener('keydown', e => {
+    const k = +e.key; if (k >= 1 && k <= 6 && !e.target.closest('input')) choose(TWO[k - 1]);
+  });
+  load(0);
+})();
+</script>
+</body>
+</html>
